@@ -4,8 +4,17 @@
 
 int main(int argc, char *argv[])
 {
+    int ret = -1;
     QApplication a(argc, argv);
-    MainWindow w;
-    w.show();
-    return a.exec();
+    MainWindow* mainWindow = MainWindow::NewInstance();
+
+    if(mainWindow)
+    {
+        mainWindow->show();
+        ret = a.exec();
+
+        delete mainWindow;
+    }
+
+    return ret;
 }

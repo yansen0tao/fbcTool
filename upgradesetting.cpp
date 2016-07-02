@@ -41,8 +41,6 @@ FbcUpgHandler::UpgradegMode UpgradeSetting::getCurrentUpgradeMode()
 
 void UpgradeSetting::closeEvent(QCloseEvent *event)
 {
-
-
     ui->lineEditDelayTime->setText(tr("%1").arg(waitRebootSecs));
     ui->lineEditAckDelay->setText(tr("%1").arg(waitReponseMsecs));
     ui->upgradeMode->setCurrentIndex(upgradegMode);

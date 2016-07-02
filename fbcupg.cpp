@@ -13,25 +13,54 @@
 #include "settingsdialog.h"
 #include "upgradesetting.h"
 
-bool FbcUpgHandler::isUpgradePrepared = false;
-bool FbcUpgHandler::isFactoryModeActive = false;
+FbcUpgHandler* FbcUpgHandler::NewInstance()
+{
+    FbcUpgHandler *ret = new FbcUpgHandler();
+
+    if (!ret || !ret->construct())
+    {
+        delete ret;
+        ret = NULL;
+    }
+
+    return ret;
+}
+
+bool FbcUpgHandler::construct()
+{
+    bool ret = true;
+
+    pSettings = new SettingsDialog::Settings;
+
+    if (!pSettings)
+        ret = false;
+
+    if (ret)
+    {
+        serial = new QSerialPort(this);
+    }
+    else
+    {
+        ret = false;
+    }
+
+    return ret;
+}
 
 FbcUpgHandler::FbcUpgHandler()
 {
-    isUpgradeRunning = false;
-    isSerialPortConnected = false;
-    waitSecs = 0;
+    running = false;
+    connected = false;
     currentFileSize = 0;
     totalUpgradeLength = 0;
 
     upgradeFileBuff = NULL;
-    serial = NULL;
 }
 
 FbcUpgHandler::~FbcUpgHandler()
 {
-    resetUpgrade();
-    resetSerialPort();
+//    resetUpgrade();
+//    resetSerialPort();
 }
 
 void FbcUpgHandler::resetSerialPort()
@@ -42,19 +71,17 @@ void FbcUpgHandler::resetSerialPort()
 
 void FbcUpgHandler::resetSerialPortState()
 {
-    if (pSettings)
-    {
-        delete pSettings;
-        pSettings = NULL;
-    }
-
-    isSerialPortConnected = false;
+    connected = false;
 }
+
+ bool FbcUpgHandler::getFactoryMode() const
+ {
+    return FactoryMode;
+ }
 
 void FbcUpgHandler::resetUpgrade()
 {
-    isUpgradeRunning = false;
-    waitSecs = 0;
+    running = false;
     currentFileSize = 0;
 
     totalUpgradeLength = 0;
@@ -71,20 +98,24 @@ FbcUpgHandler::partition_info_t* FbcUpgHandler::getPartitionInfoUpgFile(int sect
     unsigned int offset = 0;
 
     if (partition == PARTITION_FIRST_BOOT)
+    {
         offset = FIRST_BOOT_INFO_OFFSET;
+    }
     else if ((section < 2) && (partition < PARTITION_NUM)) {
         offset = section ? SECTION_1_INFO_OFFSET : SECTION_0_INFO_OFFSET;
         offset += PARTITION_INFO_SIZE * (partition - 1);
     }
     else
+    {
         return 0;
+    }
 
-    return (partition_info_t *)(upgradeFileBuff + offset);
+    return reinterpret_cast<partition_info_t*>(upgradeFileBuff + offset);
 }
 
 bool FbcUpgHandler::parseUpgradeInfo(const int section, const int partition, int &start, int &length)
 {
-    bool ret = false;
+    bool ret = true;
     partition_info_t *info = NULL;
 
     //TODO
@@ -100,24 +131,26 @@ bool FbcUpgHandler::parseUpgradeInfo(const int section, const int partition, int
         case PARTITION_UPDATE:
             start = info->code_offset;
             length = info->code_size + info->data_size;
-            ret = true;
             break;
         case PARTITION_MAIN:
             start = info->code_offset;
             length = info->code_size + info->data_size + info->spi_code_size +
-                     info->readonly_size + info->audio_param_size + info->sys_param_size;
-            ret = true;
+                    info->readonly_size + info->audio_param_size + info->sys_param_size;
             break;
         case PARTITION_PQ:
         case PARTITION_USER:
         case PARTITION_FACTORY:
             start = info->data_offset;
             length = info->data_size;
-            ret = true;
             break;
         default:
+            ret = false;
             break;
         }
+    }
+    else
+    {
+        ret = false;
     }
 
     return ret;
@@ -133,52 +166,59 @@ void FbcUpgHandler::handleError(QSerialPort::SerialPortError error)
     }
 }
 
-void FbcUpgHandler::configureSerialPort(SettingsDialog::Settings settings)
+void FbcUpgHandler::configureSerialPort(SettingsDialog::Settings &settings)
 {
-    pSettings = new SettingsDialog::Settings;
+    pSettings->name = settings.name;
+    pSettings->baudRate = settings.baudRate;
+    pSettings->stringBaudRate = settings.stringBaudRate;
+    pSettings->dataBits = settings.dataBits;
+    pSettings->stringDataBits = settings.stringDataBits;
+    pSettings->parity = settings.parity;
+    pSettings->stringParity = settings.stringParity;
+    pSettings->stopBits = settings.stopBits;
+    pSettings->stopBits = settings.stopBits;
+    pSettings->stringStopBits = settings.stringStopBits;
+    pSettings->flowControl = settings.flowControl;
+    pSettings->stringFlowControl = settings.stringFlowControl;
+    pSettings->localEchoEnabled = settings.localEchoEnabled;
+}
 
-    if (pSettings != NULL)
-    {
-        pSettings->name = settings.name;
-        pSettings->baudRate = settings.baudRate;
-        pSettings->stringBaudRate = settings.stringBaudRate;
-        pSettings->dataBits = settings.dataBits;
-        pSettings->stringDataBits = settings.stringDataBits;
-        pSettings->parity = settings.parity;
-        pSettings->stringParity = settings.stringParity;
-        pSettings->stopBits = settings.stopBits;
-        pSettings->stopBits = settings.stopBits;
-        pSettings->stringStopBits = settings.stringStopBits;
-        pSettings->flowControl = settings.flowControl;
-        pSettings->stringFlowControl = settings.stringFlowControl;
-        pSettings->localEchoEnabled = settings.localEchoEnabled;
-    }
+bool FbcUpgHandler::getRunning() const
+{
+    return running;
+}
+
+bool FbcUpgHandler::getConnected() const
+{
+    return connected;
+}
+
+void FbcUpgHandler::setDectedSignal(bool value)
+{
+    DectedSignal = value;
 }
 
 void FbcUpgHandler::readData()
 {
-    if (!serial || !serial->bytesAvailable())
+    if (!serial->bytesAvailable())
         return;
 
     QString data = serial->readAll();
 
-    //TODO
-    if (!isUpgradeRunning && isUpgradePrepared)
+    if (DectedSignal)
     {
-        if (data.contains("pre-boot#"))
+        if (data.contains("fbc-main#")||
+                data.contains("fbc-boot#")||
+                data.contains("pre-boot#"))
         {
-            //UpgradeSetting::upgradegMode = FbcUpgHandler::FactoryLiteMode;
-            FbcUpgHandler::isFactoryModeActive = true;
-            emit dispatchMessageToUi(Console, "\n当前升级模式为工厂模式，不使用升级配置中"
-                                     "的普通升级方式，但保留您在升级配置中选择的时间配置\n");
+            if (data.contains("pre-boot#"))
+                FactoryMode = true;
+
+            emit dispatchMessageToUi(Console|Prepare|Success, 0);
         }
 
-        if (data.contains("fbc-main#")||
-            data.contains("fbc-boot#")||
-            data.contains("pre-boot#"))
-        {
-            emit dispatchMessageToUi(Console|WaitPrepare|Success, "");
-        }
+        if (data.contains("fbc-upgrade#"))
+            emit dispatchMessageToUi(Console|Prepare|Failure, 0);
     }
 
     emit dispatchMessageToUi(Console|Write, data);
@@ -199,9 +239,9 @@ void FbcUpgHandler::getUpgradeInfoFromUI(QList<FbcUpgHandler::sectionInfo> secti
         int length = static_cast<sectionInfo>(list.at(i)).length;
 
         upgradeInfo += tr("\n分区 %1 : 起始地址(%2), 大小(%3)\n")
-                .arg(i, 0, 16)
-                .arg(start, 0, 16)
-                .arg(length, 0, 16);
+                        .arg(i, 0, 16)
+                        .arg(start, 0, 16)
+                        .arg(length, 0, 16);
 
         totalUpgradeLength += length;
     }
@@ -214,20 +254,35 @@ void FbcUpgHandler::handleUiMessage(int message, QString data)
     bool ret = false;
     int device = message&0xf;
     int instruction = message&0xf0;
-//    int state = message&0xf00;
+    //    int state = message&0xf00;
 
     if (Serial == device)
     {
         if (Open == instruction)
         {
             //TODO
-            ret = openSerialPort(*pSettings);
+            QString response;
+            ret = openSerialPort(pSettings, response);
+
             if (ret)
             {
                 connect(serial, &QSerialPort::readyRead, this, &FbcUpgHandler::readData);
                 connect(serial, static_cast<void (QSerialPort::*)(QSerialPort::SerialPortError)>(&QSerialPort::error),
                         this, &FbcUpgHandler::handleError);
+
+                dispatchMessageToUi(PopUp|Success, response);
             }
+            else
+            {
+                dispatchMessageToUi(PopUp|Failure, response);
+            }
+        }
+        else if (Write == instruction)
+        {
+            if (false == running)
+                serial->write(data.toLatin1());
+            else
+                emit dispatchMessageToUi(Console|Write, tr("正在升级，不支持输入！"));
         }
         else if (Close == instruction)//TODO
         {
@@ -235,8 +290,7 @@ void FbcUpgHandler::handleUiMessage(int message, QString data)
             resetSerialPort();
             emit dispatchMessageToUi(Invalid, "");
         }
-
-        if (Clean == instruction)
+        else if (Clean == instruction)
         {
             serial->clear();
         }
@@ -261,72 +315,40 @@ void FbcUpgHandler::handleUiMessage(int message, QString data)
             }
         }
     }
-    else if(Console == device)
-    {
-        if (Write == instruction)
-        {
-            if (false == isUpgradeRunning)
-                serial->write(data.toLatin1());
-            else
-                emit dispatchMessageToUi(Console|Write, tr("正在升级，不支持输入！"));
-        }
-    }
-    else if (Invalid == device)
-    {
-        ;//TODO
-    }
-    else
-    {
-        Q_ASSERT(false);
-    }
 }
 
-bool FbcUpgHandler::openSerialPort(SettingsDialog::Settings settings)
+bool FbcUpgHandler::openSerialPort(SettingsDialog::Settings *pSettings, QString &response)
 {
+    bool ret = true;
+
     qDebug() << "FbcUpgHandler::openSerialPort()" << QThread::currentThread();
 
-    serial = new QSerialPort(this);
+    serial->setPortName(pSettings->name);
+    serial->setBaudRate(pSettings->baudRate);
+    serial->setDataBits(pSettings->dataBits);
+    serial->setParity(pSettings->parity);
+    serial->setStopBits(pSettings->stopBits);
+    serial->setFlowControl(pSettings->flowControl);
 
-    if (serial)
+    if (serial->open(QIODevice::ReadWrite))
     {
-        serial->setPortName(settings.name);
-        serial->setBaudRate(settings.baudRate);
-        serial->setDataBits(settings.dataBits);
-        serial->setParity(settings.parity);
-        serial->setStopBits(settings.stopBits);
-        serial->setFlowControl(settings.flowControl);
-
-        if (serial->open(QIODevice::ReadWrite))
-        {
-            isSerialPortConnected = true;
-            dispatchMessageToUi(PopUp|Success, tr("打开串口:%1成功(波特率:%2)").
-                                arg(settings.name).arg(settings.baudRate));
-            return true;
-        }
-        else
-        {
-            isSerialPortConnected = false;
-            dispatchMessageToUi(PopUp|Failure, serial->errorString());
-            return false;
-        }
+        connected = true;
+        response = tr("打开串口:%1成功(波特率:%2)").arg(pSettings->name).arg(pSettings->baudRate);
     }
     else
     {
-        dispatchMessageToUi(PopUp|Failure, tr("内存不足"));
-        return false;
+        connected = false;
+        response = serial->errorString();
+        ret = false;
     }
+
+    return ret;
 }
 
 void FbcUpgHandler::closeSerialPort()
 {
-    if (serial)
-    {
-        if (serial->isOpen())
-            serial->close();
-
-        delete serial;
-        serial = NULL;
-    }
+    if (serial->isOpen())
+        serial->close();
 }
 
 unsigned int FbcUpgHandler::crc32(unsigned int crc, unsigned char *ptr, unsigned int buf_len)
@@ -436,7 +458,7 @@ bool FbcUpgHandler::parseFbcResponse(QByteArray &responseData)
 
 void FbcUpgHandler::prepareUpgrade()
 {
-    if (serial)
+    if (DectedSignal && serial->isWritable())
     {
         serial->putChar(0x20);
         serial->putChar('\r');
@@ -475,8 +497,8 @@ void FbcUpgHandler::initBlocksInfo(QList<sectionInfo> &list)
 
     list.clear();
 
-    if (isFactoryModeActive)
-    //if (FactoryLiteMode == UpgradeSetting::upgradegMode)
+    if (FactoryMode)
+        //if (FactoryLiteMode == UpgradeSetting::upgradegMode)
     {
         list.append(sectionInfo(KEY_OFFSET, KEY_SIZE));
         list.append(sectionInfo(FIRST_BOOT_INFO_OFFSET, FIRST_BOOT_INFO_SIZE));
@@ -501,12 +523,8 @@ void FbcUpgHandler::doUpgrade()
     QByteArray cmdStr;
     char *pBuff = NULL;
 
-    emit dispatchMessageToUi(Console, tr("\n请耐心等待%1s秒，等待接收升级文件，"
-                                         "请不要拔掉电源或者串口。。。\n")
-                             .arg(UpgradeSetting::waitRebootSecs));
-
     cmdStr.clear();
-    isUpgradeRunning = true;
+    running = true;
     killSianal = false;
     emit dispatchMessageToUi(Invalid, tr(""));
     disconnect(serial, &QSerialPort::readyRead, this, &FbcUpgHandler::readData);
@@ -522,15 +540,18 @@ void FbcUpgHandler::doUpgrade()
     {
         cmdStr = "reboot -r upgrade\r";
     }
-    //else if (FactoryLiteMode == UpgradeSetting::upgradegMode)
-    //if fbc crash or etc mormal mode invalid
-    if (FbcUpgHandler::isFactoryModeActive)
+
+    if (FactoryMode)
     {
         cmdStr = "reboot -r upgrade\r";
-        FbcUpgHandler::isFactoryModeActive = false;
+        FactoryMode = false;
     }
 
     syncHandleSerialPort(cmdStr, UpgradeSetting::waitReponseMsecs);
+
+    emit dispatchMessageToUi(Console, tr("\nFbc系统正在准备中，大约需要%1秒，请耐心等待，"
+                                         "在此期间请不要拔掉电源或者串口。。。\n")
+                             .arg(UpgradeSetting::waitRebootSecs));
 
     QThread::sleep(UpgradeSetting::waitRebootSecs);
     serial->clear();
@@ -551,9 +572,9 @@ void FbcUpgHandler::doUpgrade()
         while(!killSianal && (currentWriteLength < length))
         {
             count = (UNIT_LENGTH <= (length-currentWriteLength)?
-                     UNIT_LENGTH : length-currentWriteLength);
+                         UNIT_LENGTH : length-currentWriteLength);
             cmdStr = QString("upgrade 0x%1 0x%2\r").arg(start, 0, 16)
-                                                   .arg(count, 0, 16).toLatin1();
+                    .arg(count, 0, 16).toLatin1();
 
             syncHandleSerialPort(cmdStr, UpgradeSetting::waitReponseMsecs);
 

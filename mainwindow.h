@@ -33,7 +33,7 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *parent = 0);
+    static MainWindow* NewInstance();
     ~MainWindow();
 private slots:
     void openSerialPort();
@@ -41,15 +41,20 @@ private slots:
     void about();
     void writeData(const QByteArray &data);
     void saveLog();
-    void prepareUpgrade();
+    void clear();
+    void startPrepare();
     void handleWorkerMessage(int message, QString data);
     void getUpgradeInfo(QList<FbcUpgHandler::sectionInfo> list);
 protected:
     void closeEvent(QCloseEvent *event);
 private:
     void initActionsConnections();
-    void updateActionStatus();
+    void updateActionStatus(bool isConnected = false, bool isRunning = false);
     bool loadUpgradefile();
+    bool initUi();
+    bool construct();
+    void updatePrepareThread(bool active);
+    explicit MainWindow(QWidget *parent = 0);
 private:
     Ui::MainWindow *ui;
     Console *console;

@@ -19,7 +19,7 @@ public:
         Console = 0x3,
         PopUp = 0x4,
         ProgressBar = 0x5,
-        Invalid = 0x06,
+        Invalid = 0x6,
     };
 
     enum Instruction
@@ -32,7 +32,8 @@ public:
         Save = 0x60,
         Exit = 0x70,
         Upgrade = 0x80,
-        WaitPrepare = 0x90,
+        Prepare = 0x90,
+        updateState = 0xa0,
     };
 
     enum State
@@ -45,7 +46,6 @@ public:
     {
         NormalLiteMode= 0,
         NormalFullMode,
-        //FactoryLiteMode,
     };
 
     enum
@@ -102,14 +102,13 @@ public:
         }
     };
 public:
-    FbcUpgHandler();
+    static FbcUpgHandler* NewInstance();
     ~FbcUpgHandler();
-    bool isUpgradeRunning;
-    bool isSerialPortConnected;
-    qint32 waitSecs;
-    void configureSerialPort(SettingsDialog::Settings settings);
-    static bool isUpgradePrepared;
-    static bool isFactoryModeActive;
+    void configureSerialPort(SettingsDialog::Settings &settings);
+    void setDectedSignal(bool value);
+    bool getConnected() const;
+    bool getRunning() const;
+    bool getFactoryMode() const;
 private:
     const int LAYOUT_VERSION_OFFSET = 0x40000;
     const int LAYOUT_VERSION_SIZE = 0x1000;
@@ -134,10 +133,16 @@ private:
     QList<sectionInfo> list;
     int totalUpgradeLength;
     bool killSianal;
+    bool FactoryMode;
+    bool DectedSignal;
+    bool connected;
+    bool running;
 private:
+    bool construct();
+    FbcUpgHandler();
     unsigned int crc32(unsigned int crc, unsigned char *ptr, unsigned int buf_len);
     bool loadUpgradefile(const QString &filename, QString &responseData);
-    bool openSerialPort(SettingsDialog::Settings Settings);
+    bool openSerialPort(SettingsDialog::Settings *pSettings, QString &response);
     void closeSerialPort();
     void syncHandleSerialPort(QByteArray &rData, int delayMsec);
     bool parseFbcResponse(QByteArray &responseData);
@@ -145,6 +150,7 @@ private:
     void resetSerialPort();
     void resetUpgrade();
     void initBlocksInfo(QList<sectionInfo> &list);
+    bool checkMessageValid(int message, QString &data);
     bool parseUpgradeInfo(const int section, const int partition, int &start, int &length);
     FbcUpgHandler::partition_info_t* getPartitionInfoUpgFile(int section, int partition);
 signals:

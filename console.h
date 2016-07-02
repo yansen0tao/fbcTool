@@ -10,7 +10,6 @@ class Console : public QPlainTextEdit
 
 signals:
     void getData(const QByteArray &data);
-
 public:
     explicit Console(QWidget *parent = 0);
     void putData(const QString &data);

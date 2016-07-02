@@ -17,7 +17,6 @@ class UpgradeSetting : public QDialog
 public:
     explicit UpgradeSetting(QWidget *parent = 0);
     ~UpgradeSetting();
-
     static int waitRebootSecs;
     static int waitReponseMsecs;
     QString getUpgradeModeString();
