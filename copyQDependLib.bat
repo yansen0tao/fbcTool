@@ -1,0 +1,1 @@
+C:\Qt\Qt5.6.1\5.6\mingw49_32\bin\windeployqt.exe fbcUpg.exe
